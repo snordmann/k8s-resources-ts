@@ -1,10 +1,14 @@
 /**
  * Represents a Kubernetes memory resource value.
- * Memory resources are measured in bytes and can be specified using binary (power of 2) units:
+ * Memory resources are measured in bytes and can be specified using binary (power of 2) SI or decimal (base-10) SI units:
  * - Ki = 1024 bytes
- * - Mi = 1024 KiB
- * - Gi = 1024 MiB
- * - Ti = 1024 GiB
+ * - Mi = 1024 Ki
+ * - Gi = 1024 Mi
+ * - Ti = 1024 Gi
+ * - k  = 1000 bytes (yes, it is written in lower-case)
+ * - M  = 1000 k
+ * - G  = 1000 M
+ * - T  = 1000 G
  * 
  * @example
  * ```typescript
@@ -15,8 +19,33 @@
  */
 export class MemoryResource {
     private value: number; // Stored in bytes
+    private sourceFormat: keyof typeof MemoryResource.FORMATS; // Which format to use by default when printing
+
+    private static FORMATS = {
+      BinarySI: {
+        "B": 1,
+        "Ki": 1024,
+        "Mi": 1024 ** 2,
+        "Gi": 1024 ** 3,
+        "Ti": 1024 ** 4,
+        "Pi": 1024 ** 5,
+        "Ei": 1024 ** 6,
+      } as const,
+      DecimalSI: {
+        "": 1,
+        "k": 1_000,
+        "M": 1_000 ** 2,
+        "G": 1_000 ** 3,
+        "T": 1_000 ** 4,
+        "P": 1_000 ** 5,
+        "E": 1_000 ** 6,
+      } as const
+    } as const;
   
-    private static UNITS = { "Ki": 1024, "Mi": 1024 ** 2, "Gi": 1024 ** 3, "Ti": 1024 ** 4 };
+    private static UNITS = {
+      ...MemoryResource.FORMATS.BinarySI,
+      ...MemoryResource.FORMATS.DecimalSI,
+    } as const;
 
     /**
      * Validates that a byte value is valid according to Kubernetes rules.
@@ -29,6 +58,9 @@ export class MemoryResource {
       }
       if (!Number.isFinite(bytes)) {
         throw new Error("Memory resources must be finite numbers");
+      }
+      if (bytes > 2 ** 63 - 1) {
+        throw new Error("Memory resources must not be larger than 2^63-1");
       }
       if (Math.floor(bytes) !== bytes) {
         throw new Error("Memory resources must be whole numbers of bytes");
@@ -45,18 +77,21 @@ export class MemoryResource {
         throw new Error("Memory resources cannot be negative");
       }
 
-      const match = resource.match(/^(\d+(\.\d+)?)([a-zA-Z]*)$/);
+      const match = resource.match(/^(\d+(?:\.\d+)?)([a-zA-Z]*)$/);
       if (!match) throw new Error("Invalid memory resource format. Must be a number followed by an optional unit (e.g., '128Mi' or '1Gi')");
       
-      let [, num, , unit] = match;
+      let [, num, unit] = match;
       const multiplier = MemoryResource.UNITS[unit as keyof typeof MemoryResource.UNITS];
-      if (unit && !multiplier && unit !== 'B') {
-        throw new Error("Invalid memory unit. Must be one of: B, Ki, Mi, Gi, Ti");
+      if (unit && !multiplier) {
+        throw new Error(`Invalid memory unit. Must be one of: ${Object.keys(MemoryResource.UNITS).join(", ")}`);
       }
 
-      const value = parseFloat(num) * (multiplier || 1);
+      // TODO We need something better than parse float, because 0.55Gi should be able to be
+      // canonicallized to a whole byte unit, but it currently does not, due to floating point precision (or the lack of it)
+      const value = parseFloat(num) * multiplier;
       MemoryResource.validateBytes(value);
       this.value = value;
+      this.sourceFormat = unit in MemoryResource.FORMATS.BinarySI ? "BinarySI" : "DecimalSI";
     }
   
     /**
@@ -64,15 +99,16 @@ export class MemoryResource {
      * @param value - The number of bytes to format
      * @returns A string representation in the most appropriate unit
      */
-    private format(value: number): string {
-      const units = ["Gi", "Mi", "Ki"];
-      for (const unit of units) {
-        const unitValue = MemoryResource.UNITS[unit as keyof typeof MemoryResource.UNITS];
+    private format(value: number, format: keyof typeof MemoryResource.FORMATS = this.sourceFormat): string {
+      const units = Object.entries(MemoryResource.FORMATS[format]).sort(([, valueA], [, valueB]) => valueB - valueA);
+      for (const [unitName, unitValue] of units) {
         if (value >= unitValue) {
-          return `${value / unitValue}${unit}`;
+          return `${value / unitValue}${unitName}`;
         }
       }
-      return `${value}B`; // Default to bytes if too small
+      const smallestUnit = units.slice(-1)[0];
+      const smallestUnitName = smallestUnit[0]
+      return `${value}${smallestUnitName}`;
     }
   
     /**
@@ -216,7 +252,7 @@ export class MemoryResource {
      * Returns a string representation of the memory resource.
      * @returns A human-readable string in the most appropriate unit
      */
-    toString(): string {
-      return this.format(this.value);
+    toString(format: keyof typeof MemoryResource.FORMATS = this.sourceFormat): string {
+      return this.format(this.value, format);
     }
 } 
