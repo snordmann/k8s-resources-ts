@@ -87,8 +87,20 @@ describe('MemoryResource', () => {
     // Edge cases
     it('should handle decimal values', () => {
       const mem = new MemoryResource('0.5Gi');
-      expect(mem.valueOf()).toBe(0.5 * 1024**3);
+      expect(mem.valueOf()).toBe(536_870_912);
     });
+    it('should handle decimal values with a precision of max 3 denominator digits', () => {
+      const mem = new MemoryResource('0.162G');
+      expect(mem.valueOf()).toBe(162_000_000);
+    });
+    it('should throw on values that have fractional bytes', () => {
+      expect(() => new MemoryResource('0.55Gi')).toThrow("Memory resources must be whole numbers of bytes");
+      expect(() => new MemoryResource('0.553B')).toThrow("Memory resources must be whole numbers of bytes");
+    });
+    it('should throw on inputs that have more than 4 points of precision', () => {
+      expect(() => new MemoryResource('0.1234M')).toThrow("Invalid memory resource format");
+    });
+    
 
     it('should handle zero with unit', () => {
       const mem = new MemoryResource('0B');
@@ -248,7 +260,7 @@ describe('MemoryResource', () => {
       expect(sum.valueOf()).toBe(2 * 1024 ** 3);
     });
   });
-
+  
   describe('comparison operations', () => {
     it('should compare equal resources', () => {
       const mem1 = new MemoryResource('1Gi');
@@ -331,8 +343,8 @@ describe('MemoryResource', () => {
     });
 
     it('should format large byte values', () => {
-      const mem = new MemoryResource('9999B');
-      expect(mem.toString()).toBe('9.7646484375Ki');
+      const mem = new MemoryResource('1152B');
+      expect(mem.toString()).toBe('1.125Ki');
     });
   });
 }); 

@@ -23,17 +23,17 @@ export class MemoryResource {
 
     private static FORMATS = {
       BinarySI: {
-        "B": 1,
-        "Ki": 1024,
-        "Mi": 1024 ** 2,
-        "Gi": 1024 ** 3,
-        "Ti": 1024 ** 4,
-        "Pi": 1024 ** 5,
-        "Ei": 1024 ** 6,
+        "B":  1_024 ** 0, // = 1
+        "Ki": 1_024 ** 1,
+        "Mi": 1_024 ** 2,
+        "Gi": 1_024 ** 3,
+        "Ti": 1_024 ** 4,
+        "Pi": 1_024 ** 5,
+        "Ei": 1_024 ** 6,
       } as const,
       DecimalSI: {
-        "": 1,
-        "k": 1_000,
+        "":  1_000 ** 0, // = 1
+        "k": 1_000 ** 1,
         "M": 1_000 ** 2,
         "G": 1_000 ** 3,
         "T": 1_000 ** 4,
@@ -62,8 +62,11 @@ export class MemoryResource {
       if (bytes > 2 ** 63 - 1) {
         throw new Error("Memory resources must not be larger than 2^63-1");
       }
-      if (Math.floor(bytes) !== bytes) {
-        throw new Error("Memory resources must be whole numbers of bytes");
+      if (bytes > Number.MAX_SAFE_INTEGER) {
+        // We could either throw, or inform the user somehow, that we start losing precision here.
+        // If we throw, this library will not support Exabyte and Exibyte.
+
+        // throw new Error(`Memory resource my not be larger than ${Number.MAX_SAFE_INTEGER} bytes, because we would lose precision`);
       }
     }
   
@@ -77,21 +80,26 @@ export class MemoryResource {
         throw new Error("Memory resources cannot be negative");
       }
 
-      const match = resource.match(/^(\d+(?:\.\d+)?)([a-zA-Z]*)$/);
-      if (!match) throw new Error("Invalid memory resource format. Must be a number followed by an optional unit (e.g., '128Mi' or '1Gi')");
+      const memoryRegex = /^(?<numerator>\d+)(?:\.(?<denominator>\d{1,3}))?(?<suffix>[a-zA-Z]*)$/
+      const match = resource.match(memoryRegex);
+      if (!match) throw new Error(`Invalid memory resource format. Must be a number followed by an optional unit (e.g., '128Mi' or '1Gi'). Must match regex ${memoryRegex}`);
       
-      let [, num, unit] = match;
-      const multiplier = MemoryResource.UNITS[unit as keyof typeof MemoryResource.UNITS];
-      if (unit && !multiplier) {
+      let { numerator, denominator, suffix } = match.groups as {numerator: string, denominator?: string, suffix: string};
+      const multiplier = MemoryResource.UNITS[suffix as keyof typeof MemoryResource.UNITS];
+      if (suffix && !multiplier) {
         throw new Error(`Invalid memory unit. Must be one of: ${Object.keys(MemoryResource.UNITS).join(", ")}`);
       }
 
-      // TODO We need something better than parse float, because 0.55Gi should be able to be
-      // canonicallized to a whole byte unit, but it currently does not, due to floating point precision (or the lack of it)
-      const value = parseFloat(num) * multiplier;
+      // To make sure we never use floats, we work in "millibytes" temporarily
+      const numberMilliByte = BigInt(numerator) * 1_000n + BigInt((denominator ?? "").padEnd(3, "0"));
+      const valueMillibyte = BigInt(numberMilliByte) * BigInt(multiplier);
+      if (valueMillibyte % 1_000n != 0n) {
+        throw new Error("Memory resources must be whole numbers of bytes");
+      }
+      const value = Number(valueMillibyte / 1_000n);
       MemoryResource.validateBytes(value);
       this.value = value;
-      this.sourceFormat = unit in MemoryResource.FORMATS.BinarySI ? "BinarySI" : "DecimalSI";
+      this.sourceFormat = suffix in MemoryResource.FORMATS.BinarySI ? "BinarySI" : "DecimalSI";
     }
   
     /**
